@@ -1,0 +1,7 @@
+Lottie:
+  project: Lottie.xcodeproj
+  sdks:
+    - iphoneos
+    - iphonesimulator
+    - appletvos
+    - appletvsimulator

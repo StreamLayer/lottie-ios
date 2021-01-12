@@ -1,19 +1,15 @@
 {
-  "name": "lottie-ios",
-  "version": "3.1.9",
-  "description": "Lottie is a mobile library for Android and iOS that parses Adobe After Effects animations exported as json with bodymovin and renders the vector animations natively on mobile and through React Native!",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/airbnb/lottie-ios.git"
-  },
-  "author": "Brandon Withrow <buba447@gmail.com>",
-  "license": "Apache-2.0",
-  "bugs": {
-    "url": "https://github.com/airbnb/lottie-ios/issues"
-  },
-  "homepage": "https://github.com/airbnb/lottie-ios#readme"
+    "private": true,
+    "name": "@streamlayer/lottie-ios",
+    "dependencies": {
+        "@babel/runtime": "^7.12.5",
+        "@semantic-release/exec": "^5.0.0",
+        "@semantic-release/git": "^9.0.0",
+        "github-release-cli": "^2.0.0",
+        "semantic-release": "^17.2.2"
+    },
+    "devDependencies": {
+        "@semantic-release/npm": "^7.0.6"
+    },
+    "version": "1.2.5"
 }

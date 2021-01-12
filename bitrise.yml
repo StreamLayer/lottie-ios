@@ -1,0 +1,194 @@
+---
+format_version: '6'
+default_step_lib_source: https://github.com/bitrise-io/bitrise-steplib.git
+project_type: ios
+
+trigger_map:
+- tag: v*.*.*
+  workflow: schedule-stacks
+- push_branch: master
+  workflow: deploy
+- push_branch: next
+  workflow: deploy
+
+app:
+  envs:
+  - BITRISE_PROJECT_PATH: Lottie.xcodeproj
+  - artifact: Lottie.framework.zip
+  - owner: StreamLayer
+  - repo: lottie-ios
+
+workflows:
+  _clone_repo:
+    steps:
+    - activate-ssh-key:
+        run_if: '{{getenv "SSH_RSA_PRIVATE_KEY" | ne ""}}'
+    - git-clone: {}
+
+  _prepare_node:
+    before_run:
+    - _clone_repo
+    steps:
+    - script:
+        deps:
+          brew:
+          - name: node@14
+          - name: yarn
+          - name: xcodegen
+          - name: curl
+        run_if: .IsCI
+        inputs:
+          - content: |-
+              #!/bin/bash
+              set -ex
+              
+              yarn --frozen-lockfile --check-files --prefer-offline
+  _prepare_xcode:
+    before_run:
+    - _clone_repo
+    steps:
+    - script:
+        deps:
+          brew:
+          - name: node@14
+          - name: npm
+          - name: yarn
+          - name: xcodegen
+        run_if: .IsCI
+        inputs:
+          - content: |-
+              #!/bin/bash
+              set -ex
+              brew remove carthage || true
+              brew tap nsoperations/formulas && brew install nsoperations/formulas/carthage
+              envman add --key CURL --value "curl"
+              yarn --frozen-lockfile --check-files --prefer-offline 
+  _xcode:
+    before_run:
+      - _prepare_xcode
+    after_run:
+      - _push
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+            [ "$RELEASE_VERSION" ] || { echo "Error: Please define RELEASE_VERSION variable." >&2; exit 1; }
+            carthage version
+            if [ "$(carthage swift-version)" != "${EXPECTED_SWIFT}" ]; then
+              echo "Invalid swift version" 1>&2
+              exit 1
+            fi
+            # ensure its the latest version
+            git fetch
+            git checkout v$RELEASE_VERSION
+            swift_version=`echo ${EXPECTED_SWIFT} | awk -F+ '{print $1}'`
+            # additional release tag
+            # format of x.x.x-x.x.x
+            RELEASE_TAG=${RELEASE_VERSION}-${swift_version}
+            # generate the project
+            xcodegen
+            
+            # custom bootstrap process to avoid issues with binary cache
+            ./scripts/carthage-bootstrap.sh \
+              ./scripts/gh-release-download.sh \
+              ./scripts/carthage.sh
+            exclude=`find ./Carthage/Build -name "*.version" \
+                -o -name "*.framework" \
+                -o -name "*.framework.dSYM" \
+                -o -name "*.bcsymbolmap" \
+              | awk '{ print "-x \""$0"**\"" }' \
+              | paste -s -d" " -`
+            ./scripts/carthage.sh build --commitish $RELEASE_TAG \
+              --cache-builds \
+              --no-skip-current
+            
+            # remove stale one as zip updates existing stuff in-place
+            rm -f ${artifact}
+            echo $exclude | xargs zip -r ${artifact} Carthage/Build
+            envman add --key RELEASE_TAG --value ${RELEASE_TAG}
+  _push:
+    steps:
+    - script:
+        run_if: .IsCI
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -e
+            git add .
+            git commit --allow-empty -m "chore: created ${RELEASE_TAG} artifacts [skip ci]"
+            git tag $RELEASE_TAG
+            git remote set-url origin https://${owner}:${GH_TOKEN}@github.com/${owner}/${repo}.git
+            git push origin refs/tags/${RELEASE_TAG}
+            # find latest release
+            ./node_modules/.bin/github-release upload \
+              --owner $owner --repo $repo --token $GH_TOKEN --tag $RELEASE_TAG --prerelease true \
+              $artifact
+  # trigger xcode 12.1 build
+  xcode_113:
+    meta:
+      bitrise.io:
+        stack: osx-xcode-11.3.x
+    envs:
+    - EXPECTED_SWIFT: 5.1.3+d6c4ba50e84722a815542bda2b6e8a42
+    after_run:
+    - _xcode
+
+  # trigger xcode 12.1 build
+  xcode_121:
+    meta:
+      bitrise.io:
+        stack: osx-xcode-12.1.x
+    envs:
+    - EXPECTED_SWIFT: 5.3+df4651b6117805e4aa1fc1bc0670304e
+    after_run:
+    - _xcode
+
+  schedule-stacks:
+    description: |-
+      after initial assets were generated schedule 3 builds, which will create appropriate
+      artifacts for respected platforms
+    meta:
+      bitrise.io:
+        stack: osx-xcode-12.1.x
+    before_run:
+    - _prepare_node
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+            release=`node -e "process.stdout.write(require('./package.json').version)"`
+            envman add --key RELEASE_VERSION --value ${release}
+    - build-router-start:
+        inputs:
+        - workflows: xcode_113
+        - wait_for_builds: 'false'
+        - access_token: "$BITRISE_ACCESS_TOKEN"
+        - environment_key_list: "RELEASE_VERSION\n"
+
+    - build-router-start:
+        inputs:
+        - workflows: xcode_121
+        - wait_for_builds: 'false'
+        - access_token: "$BITRISE_ACCESS_TOKEN"
+        - environment_key_list: "RELEASE_VERSION\n"
+
+  deploy:
+    meta:
+      bitrise.io:
+        stack: osx-xcode-12.1.x
+    description: |-
+      runs semantic-release to produce sane changelog, create git tags and
+      releases
+    before_run:
+      - _prepare_node
+    steps:
+    - script:
+        inputs:
+        - content: |-
+            #!/bin/bash
+            set -ex
+            yarn semantic-release
